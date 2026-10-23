@@ -1,90 +1,52 @@
-options(repos = c(CRAN = "https://cloud.r-project.org"), error = NULL)
-Sys.setenv(
-  OMP_NUM_THREADS = "1",
-  OPENBLAS_NUM_THREADS = "1",
-  MKL_NUM_THREADS = "1",
-  VECLIB_MAXIMUM_THREADS = "1"
-)
 
-script_path <- function() {
-  arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
-  if (length(arg)) {
-    return(normalizePath(sub("^--file=", "", arg[1L]), winslash = "/"))
-  }
+Sys.setenv(OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1",
+           MKL_NUM_THREADS = "1", VECLIB_MAXIMUM_THREADS = "1")
 
-  if (requireNamespace("rstudioapi", quietly = TRUE) &&
-      rstudioapi::isAvailable()) {
-    path <- rstudioapi::getSourceEditorContext()$path
-    if (nzchar(path)) return(normalizePath(path, winslash = "/"))
-  }
-
-  path <- vapply(
-    sys.frames(),
-    function(frame) if (is.null(frame$ofile)) "" else as.character(frame$ofile[1L]),
-    character(1L)
-  )
-  path <- path[nzchar(path)]
-  if (length(path)) {
-    return(normalizePath(tail(path, 1L), winslash = "/"))
-  }
-
-  normalizePath(file.choose(), winslash = "/")
+script <- unlist(lapply(sys.frames(), function(frame) frame$ofile))
+sourced <- length(script) > 0L
+if (!sourced) {
+  script <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))
+  script <- gsub("~+~", " ", script, fixed = TRUE)
 }
-
-ensure_package <- function(package, optional = FALSE) {
-  if (requireNamespace(package, quietly = TRUE)) return(invisible(TRUE))
-
-  type <- if (.Platform$OS.type == "windows") "binary" else getOption("pkgType")
-  installed <- tryCatch({
-    install.packages(package, dependencies = NA, type = type)
-    requireNamespace(package, quietly = TRUE)
-  }, error = function(e) FALSE)
-
-  if (!installed && !optional) {
-    stop("Could not install package '", package, "'.")
-  }
-  invisible(installed)
-}
-
-root <- dirname(script_path())
+root <- if (length(script)) dirname(tail(script, 1L)) else getwd()
 core_file <- file.path(root, "simulation_code.R")
+if (!file.exists(core_file) && file.exists("simulation_code.R"))
+  core_file <- "simulation_code.R"
 if (!file.exists(core_file)) {
-  stop("simulation_code.R must be in the same folder as run_simulation.R.")
+  if (!interactive())
+    stop("Cannot find simulation_code.R. Keep both R files in the extracted folder.",
+         call. = FALSE)
+  message("Select simulation_code.R from the unzipped simulation folder.")
+  core_file <- file.choose()
 }
+core_file <- normalizePath(core_file, mustWork = TRUE)
+root <- dirname(core_file)
 
-ensure_package("clue")
-ensure_package("writexl")
-ensure_package("iGraphMatch", optional = TRUE)
-source(core_file, local = .GlobalEnv)
-
-ncores <- parallel::detectCores(logical = TRUE)
-if (is.na(ncores)) ncores <- 32L
+packages <- c("clue", "writexl")
+missing <- packages[!vapply(packages, requireNamespace, logical(1), quietly = TRUE)]
+if (length(missing)) install.packages(missing, repos = "https://cloud.r-project.org")
+source(core_file)
 
 cfg <- list(
   reps = 1000L,
-  n = c(250L, 500L, 1000L, 2000L, 4000L),
   p = c(2L, 3L, 5L),
   M = c(1L, 3L, 5L),
-  cases = seq_len(16L),
   alpha = 0.05,
   burnin = 1000L,
-  null_draws = 100000L,
   smooth_exp_tau = 0.25,
-  ncores = max(1L, min(32L, ncores - 1L)),
-  wave_per_worker = 2L,
-  solver = "auto",              # auto, iGraphMatch, TreeDist, or clue
-  allow_slow_solver = FALSE,
-  resume = TRUE,
-  outdir = root
+  ncores = max(1L, min(32L, parallel::detectCores() - 1L)),
+  batch_size = 128L
 )
 
-results <- run_experiment(cfg, core_file)
-selected <- results[results$M == 3L, ]
-
-cat("\nMain size results (M = 3):\n")
-print(selected[selected$role == "size_main", ], row.names = FALSE)
-cat("\nMain power results (M = 3):\n")
-print(selected[selected$role == "power_main", ], row.names = FALSE)
-cat("\nRobustness results (M = 3):\n")
-print(selected[grepl("_robustness$", selected$role), ], row.names = FALSE)
-cat("\nSpreadsheet:\n", file.path(root, "simulation_results.xlsx"), "\n", sep = "")
+stages <- if (sourced) character() else commandArgs(TRUE)
+if (!length(stages)) stages <- c("observed", "fitted")
+stages <- match.arg(stages, c("observed", "fitted"), several.ok = TRUE)
+results <- file.path(root, "results")
+for (setting in stages) {
+  cfg$setting <- setting
+  cfg$n <- if (setting == "fitted") c(250L, 500L, 1000L, 2000L) else
+    c(125L, 250L, 500L, 1000L)
+  cfg$cases <- if (setting == "fitted") 1:14 else 1:7
+  cfg$outdir <- file.path(results, setting)
+  run_experiment(cfg, core_file)
+}
