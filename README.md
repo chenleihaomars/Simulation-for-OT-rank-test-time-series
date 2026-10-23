@@ -1,46 +1,36 @@
-# Simulation code
+# OT-rank time-series simulations
 
-This repository contains the R implementation of the simulation study for the split-sample residual serial-independence test based on empirical optimal-transport ranks and tensor-cosine features.
+## Run
 
-## Files
-
-- **`simulation_code.R`** contains the data-generating processes, model fitting, OT assignment, test statistics, Gaussian-chaos calibration, parallel execution, checkpointing, and output routines.
-- **`run_simulation.R`** is the launcher. It locates `simulation_code.R`, checks the required packages, specifies the simulation configuration, runs the experiment, and prints selected summaries.
-
-Keep both files in the same directory.
-
-## Running an experiment
-
-From a terminal, run
-
-```bash
-Rscript run_simulation.R
-```
-
-The script can also be sourced from RStudio. Simulation settings are collected in the `cfg` list in `run_simulation.R`. In particular, edit `reps`, `n`, `p`, `M`, `cases`, `ncores`, and `outdir` as needed. To run all implemented designs, use
+Extract the ZIP, keep the files together, and run in R:
 
 ```r
-cases = CASE_INFO$case
+source(file.choose())
 ```
 
-The runner requires `clue` and `writexl`; it attempts to install `iGraphMatch` as a fast assignment solver. `TreeDist` is also supported when installed. With `solver = "auto"`, available fast solvers are checked against `clue` and the fastest valid solver is selected.
+Select `run_simulation.R`. The observed study runs first, followed by the fitted study. Missing packages (`clue` and `writexl`) are installed automatically.
 
-## Output
+Alternatively, run from a terminal in the extracted folder:
 
-The output directory contains
+```sh
+Rscript run_simulation.R          # both studies
+Rscript run_simulation.R observed # observed only
+Rscript run_simulation.R fitted   # fitted only
+```
 
-- `simulation_results.xlsx`: complete summaries, design settings, timings, and solver information;
-- `summary_results.csv`: rejection rates and Monte Carlo standard errors;
-- `raw_results.rds`: replication-level results;
-- hashed checkpoint files used when `resume = TRUE`.
+## Settings
 
-A failed replication is not discarded: the run stops and writes a diagnostic CSV.
+| Setting | Designs | Sample sizes | Tests |
+|---|---|---|---|
+| Observed | O1–O7 | 125, 250, 500, 1000 | Pairwise aggregate and block maximum |
+| Fitted | F1–F14 | 250, 500, 1000, 2000 | Learned projection |
 
-## Implementation notes
+Both studies use **1,000 replications per design cell**, dimensions **2, 3, 5**, horizons **1, 3, 5**, and level **0.05**. All tests use analytical calibration. For fitted models, `n` is the total sample size before splitting.
 
-- Model parameters are estimated only from the training block; the fitted recursion is then continued through the test block to construct the test residuals.
-- Deterministic substream seeds make results invariant to worker scheduling. For fixed `(p, n, replication)`, all cases share one independent OT reference grid, and its tensor-cosine features are evaluated once and reused.
-- VAR coefficients are fitted by pivoted-QR least squares (`tol = 1e-10`). The structured VARMA model uses bounded conditional sum of squares, and the GARCH model uses variance-targeted Gaussian QMLE with an unconstrained parameterization enforcing `alpha + beta < 0.995`; fallback optimizers are used after primary-optimizer failure.
-- Gaussian-chaos critical values are simulated once for each distinct `(p, K)`. Repeated product weights are grouped after rounding to 14 significant digits, and empirical quantiles use R's type-8 convention.
+Settings are specified in `run_simulation.R`; the methods are implemented in `simulation_code.R`. Change `ncores` to choose the number of parallel workers. The default uses up to 32 workers. Seeds are fixed, so results do not depend on worker scheduling.
 
-The master seed is fixed in `simulation_code.R` by `SIMULATION_SEED`.
+## Output and resuming
+
+Results are saved in `results/observed` and `results/fitted`. Each folder contains CSV and Excel summaries of rejection frequencies and simulation standard errors, replication-level statistics, and records of the settings, software versions, and run times.
+
+Checkpoints are saved after each batch. Run the same launcher again to resume with the same code and settings.
